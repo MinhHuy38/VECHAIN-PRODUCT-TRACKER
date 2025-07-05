@@ -1,0 +1,128 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+// Import các thư viện bảo mật tiêu chuẩn từ OpenZeppelin để quản lý quyền và chống tấn công
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+/**
+ * @title ProductTracker
+ * @dev Hợp đồng này quản lý vòng đời của sản phẩm trên chuỗi cung ứng.
+ * Nó sử dụng AccessControl để quản lý các vai trò (ai được tạo, ai được cập nhật).
+ * Nó sử dụng ReentrancyGuard để bảo vệ các hàm thay đổi trạng thái khỏi các cuộc tấn công tái nhập.
+ */
+contract ProductTracker is AccessControl, ReentrancyGuard {
+    // Định nghĩa các vai trò dưới dạng hằng số bytes32 để tiết kiệm gas
+    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE"); // Vai trò cho phép tạo sản phẩm
+    bytes32 public constant UPDATER_ROLE = keccak256("UPDATER_ROLE"); // Vai trò cho phép cập nhật lịch sử
+
+    // Cấu trúc dữ liệu cho một điểm trong lịch sử sản phẩm
+    struct HistoryEntry {
+        uint256 timestamp;      // Thời gian của khối khi bản ghi được tạo
+        string location;        // Vị trí của sản phẩm
+        string status;          // Trạng thái của sản phẩm
+        address updatedBy;      // Địa chỉ ví của người thực hiện cập nhật
+        string ipfsHash;        // Mã hash của tệp đính kèm trên IPFS
+    }
+
+    // Cấu trúc dữ liệu cho một sản phẩm
+    struct Product {
+        uint256 productId;      // ID duy nhất của sản phẩm
+        string name;            // Tên sản phẩm
+        address creator;        // Địa chỉ ví của người tạo
+        HistoryEntry[] history; // Mảng động lưu trữ toàn bộ lịch sử
+    }
+
+    // Mapping để truy xuất sản phẩm bằng ID với hiệu suất cao
+    mapping(uint256 => Product) public products;
+    // Mapping để kiểm tra sự tồn tại của một ID sản phẩm, tránh tạo trùng
+    mapping(uint256 => bool) private productExists;
+
+    // Định nghĩa các sự kiện (Events) để thông báo cho ứng dụng frontend khi có sự thay đổi dữ liệu
+    event ProductCreated(uint256 indexed productId, string name, address indexed creator);
+    event HistoryUpdated(uint256 indexed productId, uint256 timestamp, string location, string status);
+
+    /**
+     * @dev Hàm khởi tạo được gọi một lần duy nhất khi hợp đồng được triển khai.
+     * Nó cấp vai trò Quản trị (ADMIN), Tạo sản phẩm (MINTER) và Cập nhật (UPDATER) cho địa chỉ ví triển khai hợp đồng.
+     */
+    constructor() {
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(MINTER_ROLE, msg.sender);
+
+        _grantRole(UPDATER_ROLE, msg.sender);
+    }
+
+    /**
+     * @dev Hàm để tạo một sản phẩm mới.
+     * Yêu cầu người gọi phải có vai trò MINTER_ROLE.
+     * Sử dụng nonReentrant để chống tấn công tái nhập.
+     * Kiểm tra xem ID sản phẩm đã tồn tại chưa.
+     */
+    function createProduct(uint256 _productId, string memory _name, string memory _initialIpfsHash) 
+        public 
+        onlyRole(MINTER_ROLE) 
+        nonReentrant 
+    {
+        require(!productExists[_productId], "ProductTracker: ID san pham da ton tai.");
+        
+        products[_productId] = Product({
+            productId: _productId,
+            name: _name,
+            creator: msg.sender,
+            history: new HistoryEntry[](0)
+        });
+        productExists[_productId] = true;
+
+        _addHistory(_productId, "Nha may san xuat", "Da san xuat", _initialIpfsHash);
+        emit ProductCreated(_productId, _name, msg.sender);
+    }
+
+    /**
+     * @dev Hàm để thêm một bước mới vào lịch sử sản phẩm.
+     * Yêu cầu người gọi phải có vai trò UPDATER_ROLE.
+     * Sử dụng nonReentrant để chống tấn công tái nhập.
+     */
+    function addHistory(uint256 _productId, string memory _location, string memory _status, string memory _ipfsHash) 
+        public 
+        onlyRole(UPDATER_ROLE) 
+        nonReentrant 
+    {
+        require(productExists[_productId], "ProductTracker: San pham khong ton tai.");
+        _addHistory(_productId, _location, _status, _ipfsHash);
+    }
+
+    /**
+     * @dev Hàm nội bộ (private) để thêm một bản ghi lịch sử, được gọi bởi createProduct và addHistory.
+     */
+    function _addHistory(uint256 _productId, string memory _location, string memory _status, string memory _ipfsHash) private {
+        products[_productId].history.push(HistoryEntry({
+            timestamp: block.timestamp,
+            location: _location,
+            status: _status,
+            updatedBy: msg.sender,
+            ipfsHash: _ipfsHash
+        }));
+        emit HistoryUpdated(_productId, block.timestamp, _location, _status);
+    }
+
+    /**
+     * @dev Hàm chỉ đọc (view) để lấy toàn bộ lịch sử của một sản phẩm.
+     * Bất kỳ ai cũng có thể gọi hàm này mà không tốn gas.
+     */
+    function getProductHistory(uint256 _productId) public view returns (HistoryEntry[] memory) {
+        require(productExists[_productId], "ProductTracker: San pham khong ton tai.");
+        return products[_productId].history;
+    }
+
+    /**
+     * @dev Các hàm quản trị để cấp và thu hồi vai trò, chỉ người có vai trò ADMIN mới gọi được.
+     */
+    function grantMinterRole(address _account) public onlyRole(DEFAULT_ADMIN_ROLE) {
+        grantRole(MINTER_ROLE, _account);
+    }
+
+    function grantUpdaterRole(address _account) public onlyRole(DEFAULT_ADMIN_ROLE) {
+        grantRole(UPDATER_ROLE, _account);
+    }
+}
