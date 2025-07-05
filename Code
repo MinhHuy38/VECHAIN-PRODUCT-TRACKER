@@ -1,0 +1,200 @@
+import React, { useState, useEffect } from 'react';
+import { ethers } from 'ethers';
+import { VeChainKit } from '@vechain/vechain-kit';
+import './App.css'; // Import file CSS
+
+// --- THÔNG TIN HỢP ĐỒNG (CẦN THAY THẾ BẰNG KẾT QUẢ TRIỂN KHAI THỰC TẾ) ---
+const contractAddress = "0xAbCDeF1234567890aBcDef1234567890aBCdeF12"; // <== DÁN ĐỊA CHỈ THỰC TẾ VÀO ĐÂY
+const contractABI = [ /* ... Dán toàn bộ nội dung file ABI.json vào đây ... */ ]; // <== DÁN ABI THỰC TẾ VÀO ĐÂY
+
+function App() {
+    // States để quản lý kết nối và tương tác blockchain
+    const [wallet, setWallet] = useState(null);
+    const [contract, setContract] = useState(null);
+    const [account, setAccount] = useState(null);
+
+    // States cho các form nhập liệu
+    const [productId, setProductId] = useState('');
+    const [productName, setProductName] = useState('');
+    const [updateProductId, setUpdateProductId] = useState('');
+    const [updateLocation, setUpdateLocation] = useState('');
+    const [updateStatus, setUpdateStatus] = useState('');
+
+    // States để tra cứu và hiển thị kết quả
+    const [searchId, setSearchId] = useState('');
+    const [productHistory, setProductHistory] = useState([]);
+    const [productDetails, setProductDetails] = useState(null);
+    
+    // States để quản lý trạng thái giao diện
+    const [loading, setLoading] = useState(false);
+    const [message, setMessage] = useState('');
+
+    // Khởi tạo VeChainKit khi component được tải
+    useEffect(() => {
+        const vechainKit = new VeChainKit({
+            node: 'https://testnet.vechain.org',
+            network: 'test',
+        });
+        setWallet(vechainKit);
+    }, []);
+
+    // Hàm kết nối ví
+    const connectWallet = async () => {
+        if (!wallet) return;
+        try {
+            const res = await wallet.connect();
+            if (res.account) {
+                setAccount(res.account);
+                const ethersProvider = new ethers.providers.Web3Provider(wallet.thor);
+                const ethersSigner = ethersProvider.getSigner(res.account);
+                const contractInstance = new ethers.Contract(contractAddress, contractABI, ethersSigner);
+                setContract(contractInstance);
+                setMessage(`✅ Đã kết nối ví: ${res.account.substring(0, 6)}...${res.account.substring(res.account.length - 4)}`);
+            }
+        } catch (error) {
+            console.error(error);
+            setMessage(" Lỗi kết nối ví. Vui lòng thử lại.");
+        }
+    };
+    
+    // Hàm xử lý việc tạo sản phẩm
+    const handleCreateProduct = async (e) => {
+        e.preventDefault();
+        if (!contract || !productId || !productName) {
+            setMessage("Vui lòng kết nối ví và điền đủ ID, Tên sản phẩm.");
+            return;
+        }
+        setLoading(true);
+        setMessage(`Đang gửi giao dịch tạo sản phẩm ${productId}...`);
+        try {
+            const tx = await contract.createProduct(productId, productName, "initial_ipfs_hash_placeholder");
+            setMessage(`⏳ Giao dịch đã được gửi, đang chờ xác nhận... Hash: ${tx.hash.substring(0,10)}...`);
+            await tx.wait(); // Đợi giao dịch được đưa vào khối
+            setMessage(`🎉 Tạo sản phẩm ${productId} thành công!`);
+        } catch (error) {
+            console.error(error);
+            setMessage(`❌ Lỗi tạo sản phẩm: ${error?.data?.message || error.message}`);
+        }
+        setLoading(false);
+    };
+
+    // Hàm xử lý việc cập nhật lịch sử
+    const handleAddHistory = async (e) => {
+        e.preventDefault();
+        if (!contract || !updateProductId || !updateLocation || !updateStatus) {
+            setMessage("Vui lòng điền đủ ID sản phẩm và thông tin cập nhật.");
+            return;
+        }
+        setLoading(true);
+        setMessage(`Đang gửi giao dịch cập nhật cho sản phẩm ${updateProductId}...`);
+        try {
+            const tx = await contract.addHistory(updateProductId, updateLocation, updateStatus, "update_ipfs_hash_placeholder");
+            setMessage(`⏳ Giao dịch đã được gửi, đang chờ xác nhận... Hash: ${tx.hash.substring(0,10)}...`);
+            await tx.wait();
+            setMessage(`🎉 Cập nhật lịch sử cho sản phẩm ${updateProductId} thành công!`);
+        } catch (error) {
+            console.error(error);
+            setMessage(`❌ Lỗi cập nhật: ${error?.data?.message || error.message}`);
+        }
+        setLoading(false);
+    };
+    
+    // Hàm xử lý việc tìm kiếm sản phẩm
+    const handleSearchProduct = async (e) => {
+        e.preventDefault();
+        if (!contract || !searchId) return;
+        setLoading(true);
+        setProductHistory([]);
+        setProductDetails(null);
+        setMessage(`Đang tìm kiếm sản phẩm ${searchId}...`);
+        try {
+            // Sử dụng provider để gọi hàm view mà không cần signer
+            const readOnlyContract = new ethers.Contract(contractAddress, contractABI, wallet.thor);
+            const history = await readOnlyContract.getProductHistory(searchId);
+            const details = await readOnlyContract.products(searchId);
+            
+            setProductDetails({ name: details.name, creator: details.creator });
+            setProductHistory(history);
+            setMessage(`✅ Đã tìm thấy ${history.length} bản ghi lịch sử cho sản phẩm.`);
+        } catch (error) {
+            console.error(error);
+            setMessage(`❌ Lỗi tìm kiếm: Sản phẩm không tồn tại hoặc có lỗi mạng.`);
+        }
+        setLoading(false);
+    };
+
+    return (
+        <div className="container">
+            <header className="header">
+                <h1>Ứng dụng Truy xuất Nguồn gốc "Product Tracker"</h1>
+                <p>Xây dựng trên nền tảng Blockchain VeChain</p>
+                {account ? (
+                    <div className="wallet-info">Kết nối: {account}</div>
+                ) : (
+                    <button onClick={connectWallet} className="connect-button">Kết nối ví VeWorld</button>
+                )}
+            </header>
+
+            {message && <div className={`message ${message.includes('Lỗi') ? 'error' : ''}`}>{message}</div>}
+
+            <div className="main-content">
+                <div className="card">
+                    <h2>Quản trị (Yêu cầu vai trò)</h2>
+                    <form onSubmit={handleCreateProduct}>
+                        <h3>Tạo Sản phẩm mới</h3>
+                        <input type="number" placeholder="ID Sản phẩm" value={productId} onChange={e => setProductId(e.target.value)} required />
+                        <input type="text" placeholder="Tên Sản phẩm" value={productName} onChange={e => setProductName(e.target.value)} required />
+                        <button type="submit" disabled={loading || !account}>{loading ? 'Đang xử lý...' : 'Tạo Sản phẩm'}</button>
+                    </form>
+                    <hr />
+                    <form onSubmit={handleAddHistory}>
+                        <h3>Cập nhật Lịch sử Sản phẩm</h3>
+                        <input type="number" placeholder="ID Sản phẩm cần cập nhật" value={updateProductId} onChange={e => setUpdateProductId(e.target.value)} required />
+                        <input type="text" placeholder="Vị trí hiện tại" value={updateLocation} onChange={e => setUpdateLocation(e.target.value)} required />
+                        <input type="text" placeholder="Trạng thái" value={updateStatus} onChange={e => setUpdateStatus(e.target.value)} required />
+                        <button type="submit" disabled={loading || !account}>{loading ? 'Đang xử lý...' : 'Cập nhật Lịch sử'}</button>
+                    </form>
+                </div>
+
+                <div className="card">
+                    <h2>Tra cứu Công khai</h2>
+                    <form onSubmit={handleSearchProduct}>
+                        <input type="number" placeholder="Nhập ID Sản phẩm để tra cứu" value={searchId} onChange={e => setSearchId(e.target.value)} required />
+                        <button type="submit" disabled={loading}>{loading ? 'Đang tìm...' : 'Tìm kiếm'}</button>
+                    </form>
+                    
+                    {productDetails && (
+                        <div className="results-container">
+                            <h3>Thông tin Sản phẩm ID: {searchId}</h3>
+                            <p><strong>Tên sản phẩm:</strong> {productDetails.name}</p>
+                            <p><strong>Người tạo:</strong> {productDetails.creator}</p>
+                            <h4>Lịch sử hành trình:</h4>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Thời gian</th>
+                                        <th>Vị trí</th>
+                                        <th>Trạng thái</th>
+                                        <th>Người cập nhật</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {productHistory.map((entry, index) => (
+                                        <tr key={index}>
+                                            <td>{new Date(entry.timestamp * 1000).toLocaleString('vi-VN')}</td>
+                                            <td>{entry.location}</td>
+                                            <td>{entry.status}</td>
+                                            <td>{entry.updatedBy}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+export default App;
