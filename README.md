@@ -1,6 +1,4 @@
-Chắc chắn rồi. Dưới đây là phần mô tả tổng quan và khái quát về đồ án của bạn, được trình bày một cách đơn giản, dễ hiểu và không đi sâu vào chi tiết mã nguồn.
 
----
 
 ### **Mô tả Tổng quan về Đồ án: Ứng dụng "VeChain Product Tracker"**
 
